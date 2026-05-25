@@ -13,6 +13,8 @@ terraform {
   }
 }
 
+# backend block lives in backend.tf
+
 provider "azurerm" {
   features {}
   subscription_id = var.subscription_id
