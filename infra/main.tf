@@ -8,6 +8,10 @@ resource "azurerm_virtual_network" "main" {
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   address_space       = var.vnet_address_space
+
+  lifecycle {
+    ignore_changes = [tags]
+  }
 }
 
 resource "azurerm_subnet" "aks" {
@@ -27,7 +31,8 @@ resource "azurerm_subnet" "alb" {
     name = "albdelegation"
 
     service_delegation {
-      name = "Microsoft.ServiceNetworking/trafficControllers"
+      name    = "Microsoft.ServiceNetworking/trafficControllers"
+      actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
     }
   }
 }
@@ -46,6 +51,12 @@ resource "azurerm_kubernetes_cluster" "aks" {
     node_count     = 1
     vm_size        = "Standard_DS2_v2"
     vnet_subnet_id = azurerm_subnet.aks.id
+
+    upgrade_settings {
+      max_surge                     = "10%"
+      drain_timeout_in_minutes      = 0
+      node_soak_duration_in_minutes = 0
+    }
   }
 
   identity {
@@ -57,5 +68,28 @@ resource "azurerm_kubernetes_cluster" "aks" {
     service_cidr   = "172.16.0.0/16"
     dns_service_ip = "172.16.0.10"
   }
+
+  lifecycle {
+    ignore_changes = [tags]
+  }
 }
 
+resource "azurerm_user_assigned_identity" "alb" {
+  name                = var.alb_identity_name
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+
+  lifecycle {
+    ignore_changes = [tags]
+  }
+}
+
+resource "azurerm_federated_identity_credential" "alb" {
+  name                = "alb-controller-federated"
+  resource_group_name = azurerm_resource_group.main.name
+  parent_id           = azurerm_user_assigned_identity.alb.id
+
+  audience = ["api://AzureADTokenExchange"]
+  issuer   = azurerm_kubernetes_cluster.aks.oidc_issuer_url
+  subject  = "system:serviceaccount:azure-alb-system:alb-controller-sa"
+}

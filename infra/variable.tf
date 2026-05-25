@@ -33,3 +33,7 @@ variable "aks_subnet_prefix" {
 variable "alb_subnet_prefix" {
   default = ["10.0.2.0/24"]
 }
+
+variable "alb_identity_name" {
+  default = "mi-alb-controller"
+}
