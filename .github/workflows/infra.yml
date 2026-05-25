@@ -3,15 +3,19 @@ name: Infra Deployment
 on:
   push:
     branches:
-      - main
+      - new-template
   workflow_dispatch:
 
 jobs:
   # ─────────────────────────────────────────────────────────────
   # PHASE 1 — Azure infrastructure only
-  # (RG, VNet, AKS, ALB resource, managed identity, federated cred)
-  # kubernetes/helm providers are NOT exercised in this phase.
-  # Role assignments are done manually — see role-assignments.sh.
+  # (RG, VNet, AKS, ALB resource, ALB subnet association,
+  #  managed identity, federated credential)
+  #
+  # Pre-conditions (handled by setup.sh before this pipeline runs):
+  #   - Terraform state backend exists
+  #   - ALB subnet association created and imported into Terraform state
+  #   - Role assignments active and propagated
   # ─────────────────────────────────────────────────────────────
   infra:
     runs-on: ubuntu-latest
@@ -48,7 +52,8 @@ jobs:
             -target=azurerm_kubernetes_cluster.aks \
             -target=azurerm_user_assigned_identity.alb \
             -target=azurerm_federated_identity_credential.alb \
-            -target=azapi_resource.alb
+            -target=azapi_resource.alb \
+            -target=azapi_resource.alb_association
 
       - name: Terraform Apply (infra only)
         run: |
@@ -60,16 +65,19 @@ jobs:
             -target=azurerm_kubernetes_cluster.aks \
             -target=azurerm_user_assigned_identity.alb \
             -target=azurerm_federated_identity_credential.alb \
-            -target=azapi_resource.alb
+            -target=azapi_resource.alb \
+            -target=azapi_resource.alb_association
 
   # ─────────────────────────────────────────────────────────────
   # PHASE 2 — Helm + Kubernetes resources
   # Order of operations:
-  #   1. az aks get-credentials  → kubeconfig for kubectl + Terraform
-  #   2. Install Gateway API CRDs (required before any Gateway/HTTPRoute)
-  #   3. terraform apply (pass 1) → installs ALB controller Helm chart
-  #   4. Wait for ALB controller pods to be Ready
-  #   5. terraform apply (pass 2) → creates Gateway + HTTPRoute
+  #   1. az aks get-credentials
+  #   2. Install Gateway API CRDs
+  #   3. terraform apply (pass 1) → ALB controller Helm chart + k8s base resources
+  #   4. Wait for ALB controller deployment to be Ready
+  #   5. Wait for azure-alb-external GatewayClass to be Accepted
+  #   6. Verify ALB subnet association exists in Azure (fast-fail guard)
+  #   7. terraform apply (pass 2) → Gateway + HTTPRoute
   # ─────────────────────────────────────────────────────────────
   app:
     runs-on: ubuntu-latest
@@ -106,10 +114,8 @@ jobs:
         # The ALB controller requires the standard Gateway API CRDs.
         # These are NOT bundled in the Helm chart and must be applied
         # before any Gateway or HTTPRoute manifest is created.
-        # kubernetes_manifest will fail at plan time if the CRD is absent.
         run: |
           kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
-          # Wait until the CRDs are fully established before proceeding
           kubectl wait --for=condition=Established \
             crd/gateways.gateway.networking.k8s.io \
             crd/httproutes.gateway.networking.k8s.io \
@@ -122,9 +128,8 @@ jobs:
         run: terraform init
 
       - name: Terraform Apply (Helm + base k8s resources)
-        # First pass: applies everything except Gateway/HTTPRoute.
-        # helm_release.alb_controller is included here; the controller
-        # registers the azure-alb-external GatewayClass once it starts.
+        # First pass: installs ALB controller chart and base k8s resources.
+        # Excludes Gateway/HTTPRoute — GatewayClass is not yet registered.
         run: |
           terraform apply -auto-approve -var-file="terraform.tfvars" \
             -target=helm_release.alb_controller \
@@ -133,16 +138,43 @@ jobs:
             -target=kubernetes_service.nginx
 
       - name: Wait for ALB controller to be Ready
-        # The GatewayClass azure-alb-external is only available once the
-        # controller pods are fully running. Gateway creation will be
-        # rejected with "unknown GatewayClass" if applied before the
-        # controller is healthy.
+        # GatewayClass registration only happens once controller pods are Running.
         run: |
           kubectl rollout status deployment/alb-controller \
             -n azure-alb-system \
             --timeout=300s
 
+      - name: Wait for GatewayClass to be Accepted
+        # After pods are Ready the controller takes ~10-30s to register
+        # azure-alb-external. Applying the Gateway before this causes
+        # "unknown GatewayClass" and the condition never reaches Programmed=True.
+        run: |
+          kubectl wait gatewayclass azure-alb-external \
+            --for=condition=Accepted \
+            --timeout=120s
+
+      - name: Verify ALB subnet association is Succeeded
+        # Fast-fail guard: confirms setup.sh ran successfully before we
+        # attempt Gateway creation. A missing association causes a silent
+        # 10-minute Terraform timeout with no useful error message.
+        run: |
+          STATE=$(az rest \
+            --method GET \
+            --url "https://management.azure.com$(terraform output -raw alb_id)/associations/alb-association?api-version=2024-05-01-preview" \
+            --query properties.provisioningState \
+            --output tsv 2>/dev/null || echo "NotFound")
+          echo "ALB association provisioningState: $STATE"
+          if [[ "$STATE" != "Succeeded" ]]; then
+            echo "ERROR: ALB subnet association is missing or not Succeeded."
+            echo "Run setup.sh first, then re-trigger this workflow."
+            exit 1
+          fi
+
       - name: Terraform Apply (Gateway + HTTPRoute)
-        # Second pass: CRDs are installed and the controller is running,
-        # so the Gateway and HTTPRoute manifests will be accepted.
+        # All pre-conditions met:
+        #   - CRDs installed and Established
+        #   - ALB controller Running
+        #   - GatewayClass Accepted
+        #   - Subnet association Succeeded
+        # Gateway will reach Programmed=True within the 10-minute timeout.
         run: terraform apply -auto-approve -var-file="terraform.tfvars"
