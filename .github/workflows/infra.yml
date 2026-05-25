@@ -1,0 +1,148 @@
+name: Infra Deployment
+
+on:
+  push:
+    branches:
+      - new-template
+  workflow_dispatch:
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # PHASE 1 — Azure infrastructure only
+  # (RG, VNet, AKS, ALB resource, managed identity, federated cred)
+  # kubernetes/helm providers are NOT exercised in this phase.
+  # Role assignments are done manually — see role-assignments.sh.
+  # ─────────────────────────────────────────────────────────────
+  infra:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan (infra only)
+        run: |
+          terraform plan -var-file="terraform.tfvars" \
+            -target=azurerm_resource_group.main \
+            -target=azurerm_virtual_network.main \
+            -target=azurerm_subnet.aks \
+            -target=azurerm_subnet.alb \
+            -target=azurerm_kubernetes_cluster.aks \
+            -target=azurerm_user_assigned_identity.alb \
+            -target=azurerm_federated_identity_credential.alb \
+            -target=azapi_resource.alb
+
+      - name: Terraform Apply (infra only)
+        run: |
+          terraform apply -auto-approve -var-file="terraform.tfvars" \
+            -target=azurerm_resource_group.main \
+            -target=azurerm_virtual_network.main \
+            -target=azurerm_subnet.aks \
+            -target=azurerm_subnet.alb \
+            -target=azurerm_kubernetes_cluster.aks \
+            -target=azurerm_user_assigned_identity.alb \
+            -target=azurerm_federated_identity_credential.alb \
+            -target=azapi_resource.alb
+
+  # ─────────────────────────────────────────────────────────────
+  # PHASE 2 — Helm + Kubernetes resources
+  # Order of operations:
+  #   1. az aks get-credentials  → kubeconfig for kubectl + Terraform
+  #   2. Install Gateway API CRDs (required before any Gateway/HTTPRoute)
+  #   3. terraform apply (pass 1) → installs ALB controller Helm chart
+  #   4. Wait for ALB controller pods to be Ready
+  #   5. terraform apply (pass 2) → creates Gateway + HTTPRoute
+  # ─────────────────────────────────────────────────────────────
+  app:
+    runs-on: ubuntu-latest
+    needs: infra
+
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group rg-aks-alb-poc1 \
+            --name aks-alb-poc1 \
+            --overwrite-existing
+          # Rename context to match aks_cluster_name used in provider.tf
+          kubectl config rename-context \
+            "$(kubectl config current-context)" \
+            aks-alb-poc1 || true
+
+      - name: Verify cluster connectivity
+        run: kubectl get nodes
+
+      - name: Install Gateway API CRDs
+        # The ALB controller requires the standard Gateway API CRDs.
+        # These are NOT bundled in the Helm chart and must be applied
+        # before any Gateway or HTTPRoute manifest is created.
+        # kubernetes_manifest will fail at plan time if the CRD is absent.
+        run: |
+          kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
+          # Wait until the CRDs are fully established before proceeding
+          kubectl wait --for=condition=Established \
+            crd/gateways.gateway.networking.k8s.io \
+            crd/httproutes.gateway.networking.k8s.io \
+            --timeout=120s
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Apply (Helm + base k8s resources)
+        # First pass: applies everything except Gateway/HTTPRoute.
+        # helm_release.alb_controller is included here; the controller
+        # registers the azure-alb-external GatewayClass once it starts.
+        run: |
+          terraform apply -auto-approve -var-file="terraform.tfvars" \
+            -target=helm_release.alb_controller \
+            -target=kubernetes_namespace.app \
+            -target=kubernetes_deployment.nginx \
+            -target=kubernetes_service.nginx
+
+      - name: Wait for ALB controller to be Ready
+        # The GatewayClass azure-alb-external is only available once the
+        # controller pods are fully running. Gateway creation will be
+        # rejected with "unknown GatewayClass" if applied before the
+        # controller is healthy.
+        run: |
+          kubectl rollout status deployment/alb-controller \
+            -n azure-alb-system \
+            --timeout=300s
+
+      - name: Terraform Apply (Gateway + HTTPRoute)
+        # Second pass: CRDs are installed and the controller is running,
+        # so the Gateway and HTTPRoute manifests will be accepted.
+        run: terraform apply -auto-approve -var-file="terraform.tfvars"
