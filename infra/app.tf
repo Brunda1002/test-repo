@@ -78,10 +78,6 @@ resource "kubernetes_service" "nginx" {
 
 ############################################
 # GATEWAY
-# Pre-conditions guaranteed by the workflow:
-#   1. Gateway API CRDs installed (standard-install.yaml)
-#   2. ALB controller running and GatewayClass Accepted
-#   3. ALB subnet association exists (created by setup.sh, managed by Terraform)
 ############################################
 
 resource "kubernetes_manifest" "gateway" {
@@ -106,28 +102,9 @@ resource "kubernetes_manifest" "gateway" {
           name     = "http"
           port     = 80
           protocol = "HTTP"
-          allowedRoutes = {
-            namespaces = {
-              from = "Same"
-            }
-          }
         }
       ]
     }
-  }
-
-  # Terraform waits for the Gateway to be Programmed (i.e. the ALB
-  # controller has processed it and assigned a frontend IP) before
-  # moving on to the HTTPRoute.
-  wait {
-    condition {
-      type   = "Programmed"
-      status = "True"
-    }
-  }
-
-  timeouts {
-    create = "10m"
   }
 
   lifecycle {
@@ -138,11 +115,9 @@ resource "kubernetes_manifest" "gateway" {
 
   depends_on = [
     helm_release.alb_controller,
-    azapi_resource.alb,
-    azapi_resource.alb_association
+    azapi_resource.alb
   ]
 }
-
 ############################################
 # HTTP ROUTE
 ############################################
@@ -160,8 +135,7 @@ resource "kubernetes_manifest" "httproute" {
     spec = {
       parentRefs = [
         {
-          name      = "demo-gateway"
-          namespace = kubernetes_namespace.app.metadata[0].name
+          name = "demo-gateway"
         }
       ]
 

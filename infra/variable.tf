@@ -7,15 +7,15 @@ variable "location" {
 }
 
 variable "resource_group_name" {
-  default = "rg-aks-alb-poc1"
+  default = "rg-aks-alb-poc"
 }
 
 variable "vnet_name" {
-  default = "vnet-aks-alb-poc1"
+  default = "vnet-aks-alb-poc"
 }
 
 variable "aks_cluster_name" {
-  default = "aks-alb-poc1"
+  default = "aks-alb-poc"
 }
 
 variable "dns_prefix" {
@@ -32,9 +32,4 @@ variable "aks_subnet_prefix" {
 
 variable "alb_subnet_prefix" {
   default = ["10.0.2.0/24"]
-}
-
-variable "alb_identity_name" {
-  description = "Name for the User Assigned Managed Identity used by the ALB controller"
-  default     = "mi-alb-controller"
 }
