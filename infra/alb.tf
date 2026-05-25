@@ -34,6 +34,12 @@ resource "azapi_resource" "alb" {
   body = {
     properties = {}
   }
+
+  lifecycle {
+    # Azure may auto-assign tags from policy; ignore them to prevent
+    # spurious updates that trigger long ARM operations.
+    ignore_changes = [tags]
+  }
 }
 
 ############################################
@@ -41,10 +47,6 @@ resource "azapi_resource" "alb" {
 # Links the delegated alb-subnet to the traffic controller.
 # Without this the ALB controller cannot provision the Azure-side
 # frontend and the Gateway condition never flips to Programmed=True.
-#
-# setup.sh creates this resource via az CLI before Phase 1 runs,
-# then imports it into state so Terraform manages it from that point on.
-# On subsequent runs Terraform refreshes and no-ops this resource.
 ############################################
 
 resource "azapi_resource" "alb_association" {
@@ -63,8 +65,19 @@ resource "azapi_resource" "alb_association" {
   }
 
   depends_on = [azapi_resource.alb]
+
+  lifecycle {
+    # `output` is read-only metadata populated by Azure after creation
+    # (provisioningState, ARM type, etc.). The azapi provider detects it
+    # as drift on every plan and sends a PUT to Azure, which blocks for
+    # 10-12 minutes on a live association. Ignoring it prevents that.
+    #
+    # `tags` suppresses Azure Policy auto-tagging drift (e.g. Environment=Prod)
+    # that would otherwise trigger the same unnecessary PUT.
+    ignore_changes = [output, tags]
+  }
 }
 
 # Role assignments for the ALB controller managed identity are provisioned
-# by setup.sh. The deploying SP has an ABAC condition that blocks
-# Microsoft.Authorization/roleAssignments/write at these scopes.
+# by the pipeline's rbac job. The deploying SP has an ABAC condition that
+# blocks Microsoft.Authorization/roleAssignments/write at these scopes.

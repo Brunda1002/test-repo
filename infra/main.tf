@@ -1,6 +1,12 @@
 resource "azurerm_resource_group" "main" {
   name     = var.resource_group_name
   location = var.location
+
+  lifecycle {
+    # Azure Policy may auto-assign tags (e.g. Environment=Prod).
+    # Ignoring prevents spurious plans that try to remove them.
+    ignore_changes = [tags]
+  }
 }
 
 resource "azurerm_virtual_network" "main" {
@@ -8,6 +14,10 @@ resource "azurerm_virtual_network" "main" {
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   address_space       = var.vnet_address_space
+
+  lifecycle {
+    ignore_changes = [tags]
+  }
 }
 
 resource "azurerm_subnet" "aks" {
@@ -70,6 +80,10 @@ resource "azurerm_kubernetes_cluster" "aks" {
     service_cidr   = "172.16.0.0/16"
     dns_service_ip = "172.16.0.10"
   }
+
+  lifecycle {
+    ignore_changes = [tags]
+  }
 }
 
 ############################################
@@ -81,6 +95,10 @@ resource "azurerm_user_assigned_identity" "alb" {
   name                = var.alb_identity_name
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
+
+  lifecycle {
+    ignore_changes = [tags]
+  }
 }
 
 ############################################
