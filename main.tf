@@ -84,7 +84,7 @@ resource "azurerm_kubernetes_cluster" "grouper" {
 
   network_profile {
     network_plugin     = "azure"
-    network_data_plane = "azure"
+    network_data_plane = "cilium"
     network_policy     = "cilium"
     service_cidr       = var.service_cidr
     dns_service_ip     = var.dns_service_ip
