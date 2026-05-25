@@ -178,3 +178,5 @@ jobs:
         #   - Subnet association Succeeded
         # Gateway will reach Programmed=True within the 10-minute timeout.
         run: terraform apply -auto-approve -var-file="terraform.tfvars"
+
+
