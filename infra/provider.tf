@@ -36,20 +36,19 @@ provider "azurerm" {
 
 provider "azuread" {}
 
-# The kubernetes and helm providers use the kubeconfig written by
-# `az aks get-credentials` in the GitHub Actions app job.
-# This avoids provider-init-time failures that occur when
-# referencing a resource or data source (both are evaluated
-# after providers are already initialized).
 provider "kubernetes" {
-  config_path    = "~/.kube/config"
-  config_context = var.aks_cluster_name
+  host                   = azurerm_kubernetes_cluster.aks.kube_config[0].host
+  client_certificate     = base64decode(azurerm_kubernetes_cluster.aks.kube_config[0].client_certificate)
+  client_key             = base64decode(azurerm_kubernetes_cluster.aks.kube_config[0].client_key)
+  cluster_ca_certificate = base64decode(azurerm_kubernetes_cluster.aks.kube_config[0].cluster_ca_certificate)
 }
 
 provider "helm" {
   kubernetes {
-    config_path    = "~/.kube/config"
-    config_context = var.aks_cluster_name
+    host                   = azurerm_kubernetes_cluster.aks.kube_config[0].host
+    client_certificate     = base64decode(azurerm_kubernetes_cluster.aks.kube_config[0].client_certificate)
+    client_key             = base64decode(azurerm_kubernetes_cluster.aks.kube_config[0].client_key)
+    cluster_ca_certificate = base64decode(azurerm_kubernetes_cluster.aks.kube_config[0].cluster_ca_certificate)
   }
 }
 

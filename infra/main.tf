@@ -1,12 +1,6 @@
 resource "azurerm_resource_group" "main" {
   name     = var.resource_group_name
   location = var.location
-
-  lifecycle {
-    # Azure Policy may auto-assign tags (e.g. Environment=Prod).
-    # Ignoring prevents spurious plans that try to remove them.
-    ignore_changes = [tags]
-  }
 }
 
 resource "azurerm_virtual_network" "main" {
@@ -14,10 +8,6 @@ resource "azurerm_virtual_network" "main" {
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   address_space       = var.vnet_address_space
-
-  lifecycle {
-    ignore_changes = [tags]
-  }
 }
 
 resource "azurerm_subnet" "aks" {
@@ -38,10 +28,6 @@ resource "azurerm_subnet" "alb" {
 
     service_delegation {
       name = "Microsoft.ServiceNetworking/trafficControllers"
-      # Azure auto-assigns this action when the delegation is created.
-      # Declaring it explicitly prevents Terraform detecting drift and
-      # removing it on every plan, which would break ALB subnet access.
-      actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
     }
   }
 }
@@ -60,15 +46,6 @@ resource "azurerm_kubernetes_cluster" "aks" {
     node_count     = 1
     vm_size        = "Standard_DS2_v2"
     vnet_subnet_id = azurerm_subnet.aks.id
-
-    # Azure sets these upgrade defaults automatically.
-    # Declaring them here prevents drift warnings and the associated
-    # 2-minute AKS update on every Phase 2 apply.
-    upgrade_settings {
-      max_surge                     = "10%"
-      drain_timeout_in_minutes      = 0
-      node_soak_duration_in_minutes = 0
-    }
   }
 
   identity {
@@ -80,38 +57,5 @@ resource "azurerm_kubernetes_cluster" "aks" {
     service_cidr   = "172.16.0.0/16"
     dns_service_ip = "172.16.0.10"
   }
-
-  lifecycle {
-    ignore_changes = [tags]
-  }
 }
 
-############################################
-# DEDICATED USER ASSIGNED MANAGED IDENTITY
-# FOR ALB CONTROLLER (workload identity)
-############################################
-
-resource "azurerm_user_assigned_identity" "alb" {
-  name                = var.alb_identity_name
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-
-  lifecycle {
-    ignore_changes = [tags]
-  }
-}
-
-############################################
-# FEDERATED IDENTITY CREDENTIAL
-# Links AKS OIDC issuer → alb-controller SA
-############################################
-
-resource "azurerm_federated_identity_credential" "alb" {
-  name                = "alb-controller-federated"
-  resource_group_name = azurerm_resource_group.main.name
-  parent_id           = azurerm_user_assigned_identity.alb.id
-
-  audience = ["api://AzureADTokenExchange"]
-  issuer   = azurerm_kubernetes_cluster.aks.oidc_issuer_url
-  subject  = "system:serviceaccount:azure-alb-system:alb-controller-sa"
-}

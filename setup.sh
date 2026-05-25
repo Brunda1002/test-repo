@@ -1,151 +1,129 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ALB on AKS — One-Time Bootstrap Script
-# =============================================================================
-# Run this ONCE per account before triggering the GitHub Actions pipeline
-# for the first time.
-#
-# What this script does (and why it can't be in Terraform or the pipeline):
-#
-#   1. Creates the Terraform state backend (storage account + container).
-#      Terraform cannot create its own backend. The pipeline cannot do this
-#      because terraform init fails without the backend existing first.
-#
-# That's it. Everything else (role assignments, ALB association, RBAC wait)
-# now lives inside the pipeline as the "rbac" job between Phase 1 and Phase 2,
-# so sequencing is guaranteed and you never need to run anything manually
-# in parallel with the pipeline again.
-#
-# Replicating on another account
-# ────────────────────────────────
-#   1. Edit the CONFIGURATION block below.
-#   2. Run: bash setup.sh
-#   3. Push to the branch / manually dispatch infra.yml.
-#      The pipeline handles everything else automatically.
-#
-# Prerequisites
-#   - Azure CLI logged in as Owner or User Access Administrator
-#   - Access to the target subscription
+# One-time setup — run ONCE per account before triggering the pipeline.
+# Handles what the deploying SP cannot do (ABAC blocks role assignments):
+#   1. Terraform state backend
+#   2. ALB subnet association
+#   3. Role assignments + RBAC propagation wait
 # =============================================================================
 
 set -euo pipefail
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CONFIGURATION — edit these values when replicating on another account
-# ══════════════════════════════════════════════════════════════════════════════
-
+# ── Edit these for a new account ─────────────────────────────────────────────
 SUBSCRIPTION_ID="91ea5a42-5e9b-4c0c-a766-ea2a2aaa3ace"
 LOCATION="eastus"
-
-# Must match infra/backend.tf
+RESOURCE_GROUP="rg-aks-alb-poc1"
+ALB_NAME="alb-poc"
+ALB_ASSOCIATION_NAME="alb-association"
+ALB_SUBNET_NAME="alb-subnet"
+VNET_NAME="vnet-aks-alb-poc1"
+PRINCIPAL_ID="f88f890f-d062-4768-9500-379b1f879db2"   # ALB controller managed identity principal ID
 TFSTATE_RESOURCE_GROUP="rg-tfstate"
-TFSTATE_STORAGE_ACCOUNT="sttfstateaksalb001"   # globally unique — change when replicating
+TFSTATE_STORAGE_ACCOUNT="sttfstateaksalb001"           # must be globally unique
 TFSTATE_CONTAINER="tfstate"
-
-# ══════════════════════════════════════════════════════════════════════════════
-# HELPERS
-# ══════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 
 info()    { echo "[INFO]  $*"; }
-success() { echo "[OK]    $*"; }
+ok()      { echo "[OK]    $*"; }
 die()     { echo "[ERROR] $*" >&2; exit 1; }
 
-require_cmd() {
-  command -v "$1" &>/dev/null || die "'$1' is not installed. Please install it and retry."
+az account set --subscription "$SUBSCRIPTION_ID"
+ok "Subscription set."
+
+# ── Step 1: Terraform state backend ──────────────────────────────────────────
+echo -e "\n── Step 1: Terraform state backend"
+
+if ! az group show --name "$TFSTATE_RESOURCE_GROUP" --subscription "$SUBSCRIPTION_ID" &>/dev/null; then
+  az group create --name "$TFSTATE_RESOURCE_GROUP" --location "$LOCATION" --subscription "$SUBSCRIPTION_ID"
+fi
+ok "Resource group: $TFSTATE_RESOURCE_GROUP"
+
+if ! az storage account show --name "$TFSTATE_STORAGE_ACCOUNT" --resource-group "$TFSTATE_RESOURCE_GROUP" --subscription "$SUBSCRIPTION_ID" &>/dev/null; then
+  az storage account create \
+    --name "$TFSTATE_STORAGE_ACCOUNT" --resource-group "$TFSTATE_RESOURCE_GROUP" \
+    --location "$LOCATION" --sku Standard_LRS --kind StorageV2 \
+    --min-tls-version TLS1_2 --allow-blob-public-access false \
+    --subscription "$SUBSCRIPTION_ID"
+fi
+ok "Storage account: $TFSTATE_STORAGE_ACCOUNT"
+
+STORAGE_KEY=$(az storage account keys list \
+  --account-name "$TFSTATE_STORAGE_ACCOUNT" --resource-group "$TFSTATE_RESOURCE_GROUP" \
+  --subscription "$SUBSCRIPTION_ID" --query "[0].value" --output tsv)
+
+if ! az storage container show --name "$TFSTATE_CONTAINER" \
+    --account-name "$TFSTATE_STORAGE_ACCOUNT" --account-key "$STORAGE_KEY" &>/dev/null 2>&1; then
+  az storage container create --name "$TFSTATE_CONTAINER" \
+    --account-name "$TFSTATE_STORAGE_ACCOUNT" --account-key "$STORAGE_KEY" --public-access off
+fi
+ok "Blob container: $TFSTATE_CONTAINER"
+
+# ── Step 2: ALB subnet association ───────────────────────────────────────────
+echo -e "\n── Step 2: ALB subnet association"
+
+ALB_RESOURCE_ID=$(az resource show \
+  --resource-group "$RESOURCE_GROUP" --name "$ALB_NAME" \
+  --resource-type "Microsoft.ServiceNetworking/trafficControllers" \
+  --subscription "$SUBSCRIPTION_ID" --query id --output tsv)
+
+ALB_SUBNET_ID=$(az network vnet subnet show \
+  --resource-group "$RESOURCE_GROUP" --vnet-name "$VNET_NAME" --name "$ALB_SUBNET_NAME" \
+  --subscription "$SUBSCRIPTION_ID" --query id --output tsv)
+
+ASSOCIATION_ID="${ALB_RESOURCE_ID}/associations/${ALB_ASSOCIATION_NAME}"
+
+ASSOC_STATE=$(az rest --method GET \
+  --url "https://management.azure.com${ASSOCIATION_ID}?api-version=2024-05-01-preview" \
+  --output json 2>/dev/null | jq -r '.properties.provisioningState // empty' || echo "")
+
+if [[ "$ASSOC_STATE" == "Succeeded" ]]; then
+  ok "ALB association already exists — skipping."
+else
+  info "Creating ALB association..."
+  az rest --method PUT \
+    --url "https://management.azure.com${ASSOCIATION_ID}?api-version=2024-05-01-preview" \
+    --body "{\"location\":\"${LOCATION}\",\"properties\":{\"associationType\":\"subnets\",\"subnet\":{\"id\":\"${ALB_SUBNET_ID}\"}}}"
+
+  for i in $(seq 1 24); do
+    sleep 10
+    STATE=$(az rest --method GET \
+      --url "https://management.azure.com${ASSOCIATION_ID}?api-version=2024-05-01-preview" \
+      --output json | jq -r '.properties.provisioningState')
+    info "  ${i}0s — $STATE"
+    [[ "$STATE" == "Succeeded" ]] && break
+    [[ "$STATE" == "Failed" ]]    && die "Association failed."
+  done
+  ok "ALB association created."
+fi
+
+echo ""
+echo "  Import command (run from infra/ directory if first time):"
+echo "    terraform import azapi_resource.alb_association \\"
+echo "      ${ASSOCIATION_ID}"
+
+# ── Step 3: Role assignments ──────────────────────────────────────────────────
+echo -e "\n── Step 3: Role assignments"
+
+assign_role() {
+  local ROLE="$1" SCOPE="$2" LABEL="$3"
+  EXISTING=$(az role assignment list --assignee "$PRINCIPAL_ID" --role "$ROLE" \
+    --scope "$SCOPE" --subscription "$SUBSCRIPTION_ID" --query "length(@)" --output tsv 2>/dev/null || echo "0")
+  if [[ "$EXISTING" -gt 0 ]]; then
+    ok "$ROLE on $LABEL already assigned."
+  else
+    az role assignment create --assignee-object-id "$PRINCIPAL_ID" \
+      --assignee-principal-type ServicePrincipal --role "$ROLE" \
+      --scope "$SCOPE" --subscription "$SUBSCRIPTION_ID"
+    ok "$ROLE on $LABEL assigned."
+  fi
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PRE-FLIGHT
-# ══════════════════════════════════════════════════════════════════════════════
+RESOURCE_GROUP_ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}"
+assign_role "Reader" "$ALB_RESOURCE_ID" "ALB resource"
+assign_role "Network Contributor" "$RESOURCE_GROUP_ID" "resource group"
 
-require_cmd az
+echo -e "\n── Step 4: Waiting 300s for RBAC to propagate..."
+for i in $(seq 1 10); do sleep 30; info "  $((i*30))s elapsed"; done
+ok "RBAC propagation complete."
 
-info "Setting active subscription to $SUBSCRIPTION_ID ..."
-az account set --subscription "$SUBSCRIPTION_ID"
-success "Subscription set."
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 1 — Terraform state backend
-# ══════════════════════════════════════════════════════════════════════════════
-
-echo ""
-echo "══════════════════════════════════════════════════════════════════════"
-echo " STEP 1: Terraform state backend"
-echo "══════════════════════════════════════════════════════════════════════"
-
-# 1a. Resource group
-if az group show --name "$TFSTATE_RESOURCE_GROUP" --subscription "$SUBSCRIPTION_ID" &>/dev/null; then
-  success "Resource group '$TFSTATE_RESOURCE_GROUP' already exists — skipping."
-else
-  info "Creating resource group '$TFSTATE_RESOURCE_GROUP' ..."
-  az group create \
-    --name "$TFSTATE_RESOURCE_GROUP" \
-    --location "$LOCATION" \
-    --subscription "$SUBSCRIPTION_ID"
-  success "Resource group created."
-fi
-
-# 1b. Storage account
-if az storage account show \
-     --name "$TFSTATE_STORAGE_ACCOUNT" \
-     --resource-group "$TFSTATE_RESOURCE_GROUP" \
-     --subscription "$SUBSCRIPTION_ID" &>/dev/null; then
-  success "Storage account '$TFSTATE_STORAGE_ACCOUNT' already exists — skipping."
-else
-  info "Creating storage account '$TFSTATE_STORAGE_ACCOUNT' ..."
-  az storage account create \
-    --name "$TFSTATE_STORAGE_ACCOUNT" \
-    --resource-group "$TFSTATE_RESOURCE_GROUP" \
-    --location "$LOCATION" \
-    --sku Standard_LRS \
-    --kind StorageV2 \
-    --min-tls-version TLS1_2 \
-    --allow-blob-public-access false \
-    --subscription "$SUBSCRIPTION_ID"
-  success "Storage account created."
-fi
-
-# 1c. Blob container
-STORAGE_KEY=$(az storage account keys list \
-  --account-name "$TFSTATE_STORAGE_ACCOUNT" \
-  --resource-group "$TFSTATE_RESOURCE_GROUP" \
-  --subscription "$SUBSCRIPTION_ID" \
-  --query "[0].value" --output tsv)
-
-if az storage container show \
-     --name "$TFSTATE_CONTAINER" \
-     --account-name "$TFSTATE_STORAGE_ACCOUNT" \
-     --account-key "$STORAGE_KEY" &>/dev/null 2>&1; then
-  success "Blob container '$TFSTATE_CONTAINER' already exists — skipping."
-else
-  info "Creating blob container '$TFSTATE_CONTAINER' ..."
-  az storage container create \
-    --name "$TFSTATE_CONTAINER" \
-    --account-name "$TFSTATE_STORAGE_ACCOUNT" \
-    --account-key "$STORAGE_KEY" \
-    --public-access off
-  success "Blob container created."
-fi
-
-# ══════════════════════════════════════════════════════════════════════════════
-# DONE
-# ══════════════════════════════════════════════════════════════════════════════
-
-echo ""
-echo "══════════════════════════════════════════════════════════════════════"
-echo " SETUP COMPLETE"
-echo "══════════════════════════════════════════════════════════════════════"
-echo ""
-echo "  Terraform backend: $TFSTATE_STORAGE_ACCOUNT / $TFSTATE_CONTAINER"
-echo ""
-echo "Next step:"
-echo "  Trigger the GitHub Actions pipeline (push to main or"
-echo "  manually dispatch infra.yml)."
-echo ""
-echo "  The pipeline will:"
-echo "    Phase 1  — create all Azure infrastructure via Terraform"
-echo "    rbac job — assign roles + wait 5 min for RBAC propagation"
-echo "    Phase 2  — install ALB controller, wait for GatewayClass,"
-echo "               then apply Gateway + HTTPRoute"
-echo ""
-echo "  No other manual steps are needed."
+echo -e "\n✓ Setup complete. Trigger the pipeline."

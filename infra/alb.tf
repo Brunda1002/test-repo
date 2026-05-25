@@ -1,5 +1,5 @@
 ############################################
-# ALB CONTROLLER (Helm)
+# ALB CONTROLLER
 ############################################
 
 resource "helm_release" "alb_controller" {
@@ -10,19 +10,13 @@ resource "helm_release" "alb_controller" {
   repository = "oci://mcr.microsoft.com/application-lb/charts"
   chart      = "alb-controller"
 
-  set {
-    name  = "albController.podIdentity.clientID"
-    value = azurerm_user_assigned_identity.alb.client_id
-  }
-
   depends_on = [
-    azurerm_kubernetes_cluster.aks,
-    azurerm_federated_identity_credential.alb
+    azurerm_kubernetes_cluster.aks
   ]
 }
 
 ############################################
-# APPLICATION LOAD BALANCER (Azure)
+# APPLICATION LOAD BALANCER
 ############################################
 
 resource "azapi_resource" "alb" {
@@ -36,17 +30,17 @@ resource "azapi_resource" "alb" {
   }
 
   lifecycle {
-    # Azure may auto-assign tags from policy; ignore them to prevent
-    # spurious updates that trigger long ARM operations.
     ignore_changes = [tags]
   }
 }
 
 ############################################
 # ALB SUBNET ASSOCIATION
-# Links the delegated alb-subnet to the traffic controller.
-# Without this the ALB controller cannot provision the Azure-side
-# frontend and the Gateway condition never flips to Programmed=True.
+# Required: without this the ALB controller cannot provision the
+# Azure-side frontend and Gateway never reaches Programmed=True.
+# Created by setup.sh first, imported into state, then managed here.
+# ignore_changes on [output, tags] prevents a spurious 15-min PUT
+# on every apply caused by Azure auto-populating read-only fields.
 ############################################
 
 resource "azapi_resource" "alb_association" {
@@ -67,17 +61,10 @@ resource "azapi_resource" "alb_association" {
   depends_on = [azapi_resource.alb]
 
   lifecycle {
-    # `output` is read-only metadata populated by Azure after creation
-    # (provisioningState, ARM type, etc.). The azapi provider detects it
-    # as drift on every plan and sends a PUT to Azure, which blocks for
-    # 10-12 minutes on a live association. Ignoring it prevents that.
-    #
-    # `tags` suppresses Azure Policy auto-tagging drift (e.g. Environment=Prod)
-    # that would otherwise trigger the same unnecessary PUT.
     ignore_changes = [output, tags]
   }
 }
 
-# Role assignments for the ALB controller managed identity are provisioned
-# by the pipeline's rbac job. The deploying SP has an ABAC condition that
-# blocks Microsoft.Authorization/roleAssignments/write at these scopes.
+# Role assignments (Reader on ALB, Network Contributor on RG) are
+# handled by setup.sh — the deploying SP is blocked from writing
+# role assignments by an ABAC condition on the subscription.
