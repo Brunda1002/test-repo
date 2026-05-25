@@ -155,36 +155,43 @@ resource "azurerm_postgresql_flexible_server_database" "grouper" {
   collation = "en_US.utf8"
 }
 
+
 # ----- Key Vault (write secrets into existing KV) -----
+# Skipped when key_vault_name is left empty in terraform.tfvars
 data "azurerm_key_vault" "grouper" {
+  count               = var.key_vault_name != "" ? 1 : 0
   name                = var.key_vault_name
   resource_group_name = azurerm_resource_group.grouper.name
 }
 
 resource "azurerm_key_vault_secret" "psql_login" {
+  count        = var.key_vault_name != "" ? 1 : 0
   name         = "grouper-postgresql-admin-login"
   value        = var.psql_admin_login
-  key_vault_id = data.azurerm_key_vault.grouper.id
+  key_vault_id = data.azurerm_key_vault.grouper[0].id
   content_type = "text/plain"
 }
 
 resource "azurerm_key_vault_secret" "psql_password" {
+  count        = var.key_vault_name != "" ? 1 : 0
   name         = "grouper-postgresql-admin-password"
   value        = random_password.psql_admin.result
-  key_vault_id = data.azurerm_key_vault.grouper.id
+  key_vault_id = data.azurerm_key_vault.grouper[0].id
   content_type = "text/plain"
 }
 
 resource "azurerm_key_vault_secret" "psql_host" {
+  count        = var.key_vault_name != "" ? 1 : 0
   name         = "grouper-postgresql-host"
   value        = azurerm_postgresql_flexible_server.grouper.fqdn
-  key_vault_id = data.azurerm_key_vault.grouper.id
+  key_vault_id = data.azurerm_key_vault.grouper[0].id
   content_type = "text/plain"
 }
 
 resource "azurerm_key_vault_secret" "psql_db" {
+  count        = var.key_vault_name != "" ? 1 : 0
   name         = "grouper-postgresql-database"
   value        = azurerm_postgresql_flexible_server_database.grouper.name
-  key_vault_id = data.azurerm_key_vault.grouper.id
+  key_vault_id = data.azurerm_key_vault.grouper[0].id
   content_type = "text/plain"
 }

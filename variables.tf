@@ -15,9 +15,8 @@ variable "name_prefix" {
 }
 
 variable "environment" {
-  type        = string
-  default     = "poc"
-  description = "Environment tag value"
+  type    = string
+  default = "poc"
 }
 
 # --- Networking ---
@@ -49,7 +48,7 @@ variable "dns_service_ip" {
 # --- ACR ---
 variable "acr_name" {
   type        = string
-  description = "Must be globally unique, only alphanumeric"
+  description = "Must be globally unique, alphanumeric only, 5-50 chars"
 }
 
 # --- AKS ---
@@ -75,7 +74,9 @@ variable "psql_sku" {
 }
 
 # --- Key Vault ---
+# Leave empty ("") to skip writing secrets into a Key Vault
 variable "key_vault_name" {
   type        = string
-  description = "Name of a pre-existing Key Vault in the same resource group"
+  default     = ""
+  description = "Name of a pre-existing Key Vault. Leave empty to skip KV secret writing."
 }
