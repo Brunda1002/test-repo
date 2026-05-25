@@ -7,15 +7,15 @@ variable "location" {
 }
 
 variable "resource_group_name" {
-  default = "rg-aks-alb-poc"
+  default = "rg-aks-alb-poc1"
 }
 
 variable "vnet_name" {
-  default = "vnet-aks-alb-poc"
+  default = "vnet-aks-alb-poc1"
 }
 
 variable "aks_cluster_name" {
-  default = "aks-alb-poc"
+  default = "aks-alb-poc1"
 }
 
 variable "dns_prefix" {

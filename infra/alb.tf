@@ -36,11 +36,10 @@ resource "azapi_resource" "alb" {
 
 ############################################
 # ALB SUBNET ASSOCIATION
-# Required: without this the ALB controller cannot provision the
-# Azure-side frontend and Gateway never reaches Programmed=True.
+# Required: without this the Gateway never reaches Programmed=True.
 # Created by setup.sh first, imported into state, then managed here.
-# ignore_changes on [output, tags] prevents a spurious 15-min PUT
-# on every apply caused by Azure auto-populating read-only fields.
+# ignore_changes [tags] prevents Azure Policy tag drift triggering a
+# spurious 15-min PUT on every apply.
 ############################################
 
 resource "azapi_resource" "alb_association" {
@@ -61,7 +60,7 @@ resource "azapi_resource" "alb_association" {
   depends_on = [azapi_resource.alb]
 
   lifecycle {
-    ignore_changes = [output, tags]
+    ignore_changes = [tags]
   }
 }
 
