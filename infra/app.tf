@@ -78,10 +78,10 @@ resource "kubernetes_service" "nginx" {
 
 ############################################
 # GATEWAY
-# Requires:
-#   - Gateway API CRDs installed (standard-install.yaml)
-#   - ALB controller running (registers azure-alb-external GatewayClass)
-# Both are guaranteed by the workflow before this apply runs.
+# Pre-conditions guaranteed by the workflow:
+#   1. Gateway API CRDs installed (standard-install.yaml)
+#   2. ALB controller running and GatewayClass Accepted
+#   3. ALB subnet association exists (created by setup.sh, managed by Terraform)
 ############################################
 
 resource "kubernetes_manifest" "gateway" {
@@ -138,7 +138,8 @@ resource "kubernetes_manifest" "gateway" {
 
   depends_on = [
     helm_release.alb_controller,
-    azapi_resource.alb
+    azapi_resource.alb,
+    azapi_resource.alb_association
   ]
 }
 

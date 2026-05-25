@@ -36,7 +36,35 @@ resource "azapi_resource" "alb" {
   }
 }
 
+############################################
+# ALB SUBNET ASSOCIATION
+# Links the delegated alb-subnet to the traffic controller.
+# Without this the ALB controller cannot provision the Azure-side
+# frontend and the Gateway condition never flips to Programmed=True.
+#
+# setup.sh creates this resource via az CLI before Phase 1 runs,
+# then imports it into state so Terraform manages it from that point on.
+# On subsequent runs Terraform refreshes and no-ops this resource.
+############################################
+
+resource "azapi_resource" "alb_association" {
+  type      = "Microsoft.ServiceNetworking/trafficControllers/associations@2024-05-01-preview"
+  name      = "alb-association"
+  parent_id = azapi_resource.alb.id
+  location  = azurerm_resource_group.main.location
+
+  body = {
+    properties = {
+      associationType = "subnets"
+      subnet = {
+        id = azurerm_subnet.alb.id
+      }
+    }
+  }
+
+  depends_on = [azapi_resource.alb]
+}
+
 # Role assignments for the ALB controller managed identity are provisioned
-# manually via Azure CLI. See role-assignments.sh for the commands.
-# This avoids the ABAC 403 that occurs when the deploying SP lacks
-# Owner / User Access Administrator rights at the required scopes.
+# by setup.sh. The deploying SP has an ABAC condition that blocks
+# Microsoft.Authorization/roleAssignments/write at these scopes.
