@@ -1,17 +1,88 @@
-name: Grouper Infra — Terraform
+# name: Grouper ALB POC — Terraform
+ 
+# on:
+#   push:
+#     branches:
+#       - main
+#   workflow_dispatch:
+#     inputs:
+#       run_stage2:
+#         description: "Run Stage 2 - Helm + App? (yes/no)"
+#         required: true
+#         default: "no"
+ 
+# permissions:
+#   contents: read
+ 
+# env:
+#   ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+#   ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+#   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+#   ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+ 
+# jobs:
+ 
+#   stage1:
+#     name: "Stage 1 — Azure Infra"
+#     runs-on: ubuntu-latest
+#     if: github.event_name == 'push'
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: hashicorp/setup-terraform@v3
+#         with:
+#           terraform_version: "1.9.0"
+#       - name: Terraform Init
+#         run: terraform init
+#       - name: Terraform Apply — Azure infra
+#         run: |
+#           terraform apply \
+#             -var-file="terraform.tfvars" \
+#             -target=azurerm_subnet.alb \
+#             -target=azurerm_user_assigned_identity.alb \
+#             -target=azurerm_federated_identity_credential.alb \
+#             -target=azapi_resource.alb \
+#             -target=azapi_resource.alb_association \
+#             -auto-approve \
+#             -input=false
+ 
+#   stage2:
+#     name: "Stage 2 — Helm + App"
+#     runs-on: ubuntu-latest
+#     if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_stage2 == 'yes'
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: hashicorp/setup-terraform@v3
+#         with:
+#           terraform_version: "1.9.0"
+#       - name: Terraform Init
+#         run: terraform init
+#       - name: Terraform Apply — Helm + App
+#         run: |
+#           terraform apply \
+#             -var-file="terraform.tfvars" \
+#             -target=helm_release.alb_controller \
+#             -target=kubernetes_namespace.app \
+#             -target=kubernetes_deployment.nginx \
+#             -target=kubernetes_service.nginx \
+#             -target=kubernetes_manifest.gateway \
+#             -target=kubernetes_manifest.httproute \
+#             -auto-approve \
+#             -input=false
+name: Grouper ALB POC — Terraform
 
 on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      run_stage2:
+        description: "Run Stage 2 - Helm + App? (yes/no)"
+        required: true
+        default: "no"
 
 permissions:
   contents: read
-  pull-requests: write
 
 env:
   ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -20,58 +91,63 @@ env:
   ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
 
 jobs:
-  terraform:
-    name: Terraform
+
+  stage1:
+    name: "Stage 1 — Azure Infra"
     runs-on: ubuntu-latest
-
+    if: github.event_name == 'push'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.0"
+      - name: Terraform Init
+        run: terraform init
+      - name: Terraform Apply — Azure infra
+        run: |
+          terraform apply \
+            -var-file="terraform.tfvars" \
+            -target=azurerm_subnet.alb \
+            -target=azurerm_user_assigned_identity.alb \
+            -target=azurerm_federated_identity_credential.alb \
+            -target=azapi_resource.alb \
+            -target=azapi_resource.alb_association \
+            -auto-approve \
+            -input=false
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+  stage2:
+    name: "Stage 2 — Helm + App"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_stage2 == 'yes'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.9.0"
 
       - name: Terraform Init
         run: terraform init
 
-      - name: Terraform Format Check
-        run: terraform fmt -check -recursive
-        continue-on-error: true
+      # Step A: Install ALB controller Helm chart first
+      - name: Terraform Apply — ALB Controller + Namespace
+        run: |
+          terraform apply \
+            -var-file="terraform.tfvars" \
+            -target=helm_release.alb_controller \
+            -target=kubernetes_namespace.app \
+            -auto-approve \
+            -input=false
 
-      - name: Terraform Validate
-        run: terraform validate
+      # Wait for ALB controller to install CRDs before applying Gateway
+      - name: Wait for ALB controller CRDs
+        run: sleep 60
 
-      - name: Terraform Plan
-        id: plan
-        run: terraform plan -var-file="terraform.tfvars" -out=tfplan -input=false
-        continue-on-error: true
-
-      - name: Post Plan to PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const output = `#### Terraform Plan \`${{ steps.plan.outcome }}\`
-            <details><summary>Show Plan</summary>
-
-            \`\`\`
-            ${{ steps.plan.outputs.stdout }}
-            \`\`\`
-
-            </details>`;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: output
-            });
-
-      - name: Check Plan Status
-        if: steps.plan.outcome == 'failure'
-        run: exit 1
-
-      - name: Terraform Apply
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        run: terraform apply -auto-approve -input=false tfplan
+      # Step B: Deploy Gateway + HTTPRoute (needs CRDs from Helm)
+      - name: Terraform Apply — Gateway + HTTPRoute
+        run: |
+          terraform apply \
+            -var-file="terraform.tfvars" \
+            -target=kubernetes_manifest.gateway \
+            -target=kubernetes_manifest.httproute \
+            -auto-approve \
+            -input=false

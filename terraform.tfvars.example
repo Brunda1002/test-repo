@@ -1,17 +1,4 @@
-# Fill in your values before running terraform apply
-
-subscription_id  = "YOUR-SUBSCRIPTION-ID"
-name_prefix      = "grouper-poc"
-location         = "eastus"
-environment      = "poc"
-
-# Must be globally unique, alphanumeric only, 5-50 chars
-acr_name         = "acrgrouperpoc"
-
-# Pre-existing Key Vault name (must already exist in the resource group)
-key_vault_name   = "kv-grouper-poc"
-
-# Optional overrides (defaults work for a basic test)
-# node_count     = 2
-# node_vm_size   = "Standard_DS2_v2"
-# psql_sku       = "B_Standard_B2ms"
+subscription_id     = "YOUR-SUBSCRIPTION-ID"
+resource_group_name = "rg-grouper-alb-poc"
+name_prefix         = "grouper-poc"
+location            = "eastus"

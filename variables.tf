@@ -3,80 +3,34 @@ variable "subscription_id" {
   description = "Azure subscription ID"
 }
 
-variable "location" {
+variable "resource_group_name" {
   type        = string
-  default     = "eastus"
-  description = "Azure region"
+  description = "Existing RG created by Template 1"
+}
+
+variable "aks_cluster_name" {
+  type        = string
+  description = "Existing AKS cluster name created by Template 1"
+}
+
+variable "vnet_name" {
+  type        = string
+  description = "Existing VNet name created by Template 1"
 }
 
 variable "name_prefix" {
   type        = string
-  description = "Short prefix used for all resource names, e.g. 'grouper-poc'"
+  description = "Short prefix — must match what setup.sh used"
 }
 
-variable "environment" {
-  type    = string
-  default = "poc"
-}
-
-# --- Networking ---
-variable "vnet_cidr" {
-  type    = string
-  default = "10.10.0.0/22"
-}
-
-variable "aks_subnet_cidr" {
-  type    = string
-  default = "10.10.0.0/23"
-}
-
-variable "psql_subnet_cidr" {
-  type    = string
-  default = "10.10.2.0/27"
-}
-
-variable "service_cidr" {
-  type    = string
-  default = "172.16.0.0/16"
-}
-
-variable "dns_service_ip" {
-  type    = string
-  default = "172.16.0.10"
-}
-
-# --- ACR ---
-variable "acr_name" {
+variable "alb_subnet_cidr" {
   type        = string
-  description = "Must be globally unique, alphanumeric only, 5-50 chars"
+  default     = "10.10.3.0/24"
+  description = "CIDR for ALB subnet — must not overlap AKS (10.10.0.0/23) or PSQL (10.10.2.0/27)"
 }
 
-# --- AKS ---
-variable "node_count" {
-  type    = number
-  default = 2
-}
-
-variable "node_vm_size" {
-  type    = string
-  default = "Standard_DS2_v2"
-}
-
-# --- PostgreSQL ---
-variable "psql_admin_login" {
-  type    = string
-  default = "grouperadmin"
-}
-
-variable "psql_sku" {
-  type    = string
-  default = "B_Standard_B2ms"
-}
-
-# --- Key Vault ---
-# Leave empty ("") to skip writing secrets into a Key Vault
-variable "key_vault_name" {
+variable "app_namespace" {
   type        = string
-  default     = ""
-  description = "Name of a pre-existing Key Vault. Leave empty to skip KV secret writing."
+  default     = "demo"
+  description = "Kubernetes namespace for the app"
 }
