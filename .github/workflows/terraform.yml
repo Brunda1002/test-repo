@@ -129,12 +129,11 @@ jobs:
         run: terraform init
 
       # Step A: Install ALB controller Helm chart first
-      - name: Terraform Apply — ALB Controller + Namespace
+      - name: Terraform Apply — ALB Controller
         run: |
           terraform apply \
             -var-file="terraform.tfvars" \
             -target=helm_release.alb_controller \
-            -target=kubernetes_namespace.app \
             -auto-approve \
             -input=false
 
