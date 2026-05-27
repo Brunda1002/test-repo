@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # setup.sh — Run ONCE after Stage 1 (terraform apply) completes.
-# Assigns the two RBAC roles the ALB managed identity needs.
+# Assigns the two RBAC roles the ALB managed identity needs before Stage 2.
 # Run as: bash setup.sh
 
 set -euo pipefail
 
-SUBSCRIPTION_ID="f4f3ec7d-9d6f-4752-bdcc-440ed90734fe"
+# ── Variables (must match terraform.tfvars / main.tf) ─────────────────────
+SUBSCRIPTION_ID="91ea5a42-5e9b-4c0c-a766-ea2a2aaa3ace"
 RESOURCE_GROUP="Grouper-Dev"
-ALB_NAME="alb-grouper-dev"
-IDENTITY_NAME="mi-alb-grouper-dev"
+NAME_PREFIX="grouper-dev"
+ALB_NAME="alb-${NAME_PREFIX}"           # azapi_resource.alb → name = "alb-grouper-dev"
+IDENTITY_NAME="mi-alb-${NAME_PREFIX}"   # azurerm_user_assigned_identity.alb → name = "mi-alb-grouper-dev"
 
 echo "── Setting subscription"
 az account set --subscription "$SUBSCRIPTION_ID"
-echo "[OK]    Subscription set."
+echo "[OK]    Subscription set to: $SUBSCRIPTION_ID"
 
 echo "── Getting ALB identity principal ID"
 ALB_PRINCIPAL_ID=$(az identity show \
@@ -21,11 +23,13 @@ ALB_PRINCIPAL_ID=$(az identity show \
   --query principalId -o tsv)
 echo "[OK]    ALB identity principal: $ALB_PRINCIPAL_ID"
 
+echo "── Getting ALB resource ID"
 ALB_RESOURCE_ID=$(az resource show \
   --resource-group "$RESOURCE_GROUP" \
   --resource-type "Microsoft.ServiceNetworking/trafficControllers" \
   --name "$ALB_NAME" \
   --query id -o tsv)
+echo "[OK]    ALB resource ID: $ALB_RESOURCE_ID"
 
 echo "── Assigning roles"
 
@@ -52,4 +56,4 @@ for i in $(seq 30 30 300); do
 done
 
 echo "[OK]    Done. Now trigger Stage 2:"
-echo "   GitHub Actions → Run workflow (workflow_dispatch) → type yes → Run workflow"
+echo "   GitHub Actions → Run workflow (workflow_dispatch) → set run_stage2=yes → Run workflow"
