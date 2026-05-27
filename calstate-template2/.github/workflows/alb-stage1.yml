@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: terraform-state
+  cancel-in-progress: false
+
 jobs:
   terraform:
     runs-on: ubuntu-latest
@@ -33,13 +37,15 @@ jobs:
       - name: Terraform Init
         run: terraform init -reconfigure
 
-      - name: Force Unlock State
-        run: terraform force-unlock -force f7b66b13-294d-64bf-d7f5-7e80b42c991f || true
+      - name: Force Unlock Existing State
+        run: |
+          terraform force-unlock -force 55f0fef5-2c13-0ac1-a06c-ff2f966a3a10 || true
 
       - name: Terraform Validate
         run: terraform validate
+
       - name: Terraform Plan
-        run: terraform plan -var-file="terraform.tfvars"
+        run: terraform plan -input=false -var-file="terraform.tfvars"
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve -var-file="terraform.tfvars"
+        run: terraform apply -input=false -auto-approve -var-file="terraform.tfvars"
