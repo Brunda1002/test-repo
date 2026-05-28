@@ -61,16 +61,22 @@ jobs:
             --name aks-grouper-dev-cluster \
             --resource-group Grouper-Dev \
             --query "apiServerAccessProfile.authorizedIpRanges" \
-            -o tsv | tr '\t' ',')
+            -o tsv | tr '\t' ',' | sed 's/,*$//')
 
+          if [ -z "$EXISTING_IPS" ]; then
+            UPDATED_IPS="${RUNNER_IP}/32"
+          else
+            UPDATED_IPS="${EXISTING_IPS},${RUNNER_IP}/32"
+          fi
+
+          echo "Setting authorized IPs: $UPDATED_IPS"
           az aks update \
             --name aks-grouper-dev-cluster \
             --resource-group Grouper-Dev \
-            --api-server-authorized-ip-ranges "${EXISTING_IPS},${RUNNER_IP}/32"
+            --api-server-authorized-ip-ranges "$UPDATED_IPS"
 
           echo "Waiting 30s for IP whitelist to propagate..."
           sleep 30
-
       - name: Terraform Init
         run: terraform init -reconfigure
 

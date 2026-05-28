@@ -99,20 +99,27 @@ jobs:
  
       # ── 11. Remove runner IP from AKS after apply ─────────────
       - name: Remove Runner IP from AKS
-        if: always()   # runs even if apply fails — keeps AKS clean
+        if: always()
         run: |
           RUNNER_IP=$(curl -s ifconfig.me)
- 
+
           CLEANED_IPS=$(az aks show \
             --name aks-grouper-dev-cluster \
             --resource-group Grouper-Dev \
             --query "apiServerAccessProfile.authorizedIpRanges" \
             -o tsv | tr '\t' '\n' | grep -v "${RUNNER_IP}" | tr '\n' ',' | sed 's/,$//')
- 
-          az aks update \
-            --name aks-grouper-dev-cluster \
-            --resource-group Grouper-Dev \
-            --api-server-authorized-ip-ranges "$CLEANED_IPS"
- 
+
+          if [ -z "$CLEANED_IPS" ]; then
+            az aks update \
+              --name aks-grouper-dev-cluster \
+              --resource-group Grouper-Dev \
+              --api-server-authorized-ip-ranges ""
+          else
+            az aks update \
+              --name aks-grouper-dev-cluster \
+              --resource-group Grouper-Dev \
+              --api-server-authorized-ip-ranges "$CLEANED_IPS"
+          fi
+
           echo "Runner IP removed. AKS is clean."
- 
+      
