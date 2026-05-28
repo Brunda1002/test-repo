@@ -1,0 +1,150 @@
+name: Grouper ALB POC — Terraform
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+    inputs:
+      run_stage:
+        description: "stage2a or stage2b"
+        required: true
+        default: "stage2a"
+
+permissions:
+  contents: read
+
+env:
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+
+jobs:
+
+  stage1:
+    name: "Stage 1 — Azure Infra"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.0"
+
+      - name: Terraform Init
+        run: terraform init -reconfigure
+
+      - name: Terraform Apply — Azure Infra
+        run: |
+          terraform apply \
+            -var-file="terraform.tfvars" \
+            -target=azurerm_user_assigned_identity.alb \
+            -target=azurerm_federated_identity_credential.alb \
+            -target=azapi_resource.alb \
+            -target=azapi_resource.alb_association \
+            -auto-approve \
+            -input=false
+
+  stage2a:
+    name: "Stage 2A — Helm + App"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_stage == 'stage2a'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.0"
+
+      - name: Get Runner Public IP
+        run: |
+          echo "RUNNER_IP=$(curl -s https://api.ipify.org)" >> $GITHUB_ENV
+
+      - name: Whitelist Runner IP
+        run: |
+          EXISTING_IPS=$(az aks show \
+            --resource-group Grouper-Dev \
+            --name aks-grouper-dev-cluster \
+            --query "apiServerAccessProfile.authorizedIpRanges" \
+            -o tsv)
+
+          if [ -z "$EXISTING_IPS" ]; then
+            UPDATED_IPS="$RUNNER_IP/32"
+          else
+            UPDATED_IPS="${EXISTING_IPS},$RUNNER_IP/32"
+          fi
+
+          az aks update \
+            --resource-group Grouper-Dev \
+            --name aks-grouper-dev-cluster \
+            --api-server-authorized-ip-ranges "$UPDATED_IPS"
+
+      - name: Terraform Init
+        run: terraform init -reconfigure
+
+      - name: Terraform Apply — Helm + App
+        run: |
+          terraform apply \
+            -var-file="terraform.tfvars" \
+            -target=helm_release.alb_controller \
+            -target=kubernetes_namespace.grouper_app \
+            -target=kubernetes_deployment.grouper \
+            -target=kubernetes_service.grouper \
+            -auto-approve \
+            -input=false
+
+      - name: Wait For CRDs
+        run: sleep 60
+
+  stage2b:
+    name: "Stage 2B — Gateway + Route"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_stage == 'stage2b'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.0"
+
+      - name: Get Runner Public IP
+        run: |
+          echo "RUNNER_IP=$(curl -s https://api.ipify.org)" >> $GITHUB_ENV
+
+      - name: Whitelist Runner IP
+        run: |
+          EXISTING_IPS=$(az aks show \
+            --resource-group Grouper-Dev \
+            --name aks-grouper-dev-cluster \
+            --query "apiServerAccessProfile.authorizedIpRanges" \
+            -o tsv)
+
+          if [ -z "$EXISTING_IPS" ]; then
+            UPDATED_IPS="$RUNNER_IP/32"
+          else
+            UPDATED_IPS="${EXISTING_IPS},$RUNNER_IP/32"
+          fi
+
+          az aks update \
+            --resource-group Grouper-Dev \
+            --name aks-grouper-dev-cluster \
+            --api-server-authorized-ip-ranges "$UPDATED_IPS"
+
+      - name: Terraform Init
+        run: terraform init -reconfigure
+
+      - name: Terraform Apply — Gateway + Route
+        run: |
+          terraform apply \
+            -var-file="terraform.tfvars" \
+            -target=kubernetes_manifest.gateway \
+            -target=kubernetes_manifest.httproute \
+            -auto-approve \
+            -input=false
