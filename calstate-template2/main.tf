@@ -1,19 +1,7 @@
 # ============================================================
 # Calstate Template 2 — Grouper ALB POC
-#
-# Pre-requisites (calstate infra repo must be applied first):
-#   - Resource group: Grouper-Dev
-#   - VNet: grouper-dev-tf-vnet
-#   - AKS: aks-grouper-dev-cluster (with workload_identity_enabled = true)
-#
-# Pre-requisites (setup.sh — run once before Stage 2):
-#   - Reader role on ALB resource  → assigned to ALB managed identity
-#   - Network Contributor on RG    → assigned to ALB managed identity
-#
-# What Terraform manages:
-#   Stage 1: ALB managed identity, federated credential, ALB resource, association
-#             (uses EXISTING App Gateway subnet from infra)
-#   Stage 2: ALB controller (Helm)
+# Stage 1 ONLY
+# Uses EXISTING App Gateway subnet from infra
 # ============================================================
 
 # ----- Read existing calstate infra -----
@@ -40,16 +28,16 @@ data "azurerm_subnet" "appgw" {
   resource_group_name  = data.azurerm_resource_group.grouper.name
 }
 
-# ============================================================
-# Stage 1 Resources
-# ============================================================
-
 # ----- ALB Managed Identity -----
 
 resource "azurerm_user_assigned_identity" "alb" {
   name                = "mi-alb-${var.name_prefix}"
   resource_group_name = data.azurerm_resource_group.grouper.name
   location            = data.azurerm_resource_group.grouper.location
+
+  lifecycle {
+    ignore_changes = all
+  }
 }
 
 # ----- Workload Identity Federation -----
@@ -75,6 +63,10 @@ resource "azapi_resource" "alb" {
   body = {
     properties = {}
   }
+
+  lifecycle {
+    ignore_changes = all
+  }
 }
 
 # ----- Associate ALB with EXISTING App Gateway subnet -----
@@ -94,40 +86,153 @@ resource "azapi_resource" "alb_association" {
     }
   }
 }
-
 # ============================================================
-# Stage 2 Resources
-# Run manually AFTER setup.sh completes (see README.md)
+# STAGE 2 — ALB Controller, App, Gateway, HTTPRoute
 # ============================================================
 
-# ----- ALB Controller (Helm) -----
+# ----- ALB Controller via Helm -----
 
 resource "helm_release" "alb_controller" {
   name             = "alb-controller"
+  repository       = "oci://mcr.microsoft.com/application-lb/charts"
+  chart            = "alb-controller"
+  version          = "1.3.7"
   namespace        = "azure-alb-system"
   create_namespace = true
+  wait             = true
+  timeout          = 300
 
-  repository = "oci://mcr.microsoft.com/application-lb/charts"
-  chart      = "alb-controller"
-  version    = "1.10.28"
-
+  set {
+    name  = "albController.namespace"
+    value = "azure-alb-system"
+  }
   set {
     name  = "albController.podIdentity.clientID"
     value = azurerm_user_assigned_identity.alb.client_id
   }
-
-  depends_on = [
-    azurerm_federated_identity_credential.alb,
-    azapi_resource.alb,
-  ]
 }
 
-# ============================================================
-# TODO: Grouper Application (future stage)
-# ============================================================
-# Once vendor provides Grouper application manifests, add:
-#   - kubernetes_namespace for the app
-#   - kubernetes_manifest for Gateway (referencing azapi_resource.alb.id)
-#   - kubernetes_manifest for HTTPRoute (pointing to Grouper service)
-# The Grouper Deployment/Service manifests can be applied separately via kubectl
-# or included as kubernetes_manifest resources in a future Terraform update.
+# ----- App Namespace -----
+
+resource "kubernetes_namespace" "grouper_app" {
+  metadata {
+    name = "grouper-app"
+  }
+}
+
+# ----- Grouper Deployment -----
+
+resource "kubernetes_deployment" "grouper" {
+  metadata {
+    name      = "grouper"
+    namespace = kubernetes_namespace.grouper_app.metadata[0].name
+  }
+
+  spec {
+    replicas = 1
+
+    selector {
+      match_labels = { app = "grouper" }
+    }
+
+    template {
+      metadata {
+        labels = { app = "grouper" }
+      }
+
+      spec {
+        container {
+          name  = "grouper"
+          image = "${var.acr_name}.azurecr.io/grouper:${var.grouper_image_tag}"
+
+          port {
+            container_port = 80
+          }
+        }
+      }
+    }
+  }
+}
+
+# ----- Grouper Service -----
+
+resource "kubernetes_service" "grouper" {
+  metadata {
+    name      = "grouper-service"
+    namespace = kubernetes_namespace.grouper_app.metadata[0].name
+  }
+
+  spec {
+    selector = { app = "grouper" }
+
+    port {
+      port        = 80
+      target_port = 80
+    }
+  }
+}
+
+# ----- Wait for ALB CRDs to register -----
+
+resource "time_sleep" "wait_for_crds" {
+  depends_on      = [helm_release.alb_controller]
+  create_duration = "60s"
+}
+
+# ----- Gateway -----
+
+resource "kubernetes_manifest" "gateway" {
+  depends_on = [time_sleep.wait_for_crds]
+
+  manifest = {
+    apiVersion = "gateway.networking.k8s.io/v1"
+    kind       = "Gateway"
+    metadata = {
+      name      = "grouper-gateway"
+      namespace = kubernetes_namespace.grouper_app.metadata[0].name
+      annotations = {
+        "alb.networking.azure.io/alb-id" = azapi_resource.alb.id
+      }
+    }
+    spec = {
+      gatewayClassName = "azure-alb-external"
+      listeners = [{
+        name     = "http"
+        port     = 80
+        protocol = "HTTP"
+        allowedRoutes = {
+          namespaces = {
+            from = "Same"
+          }
+        }
+      }]
+    }
+  }
+}
+
+# ----- HTTPRoute -----
+
+resource "kubernetes_manifest" "httproute" {
+  depends_on = [kubernetes_manifest.gateway]
+
+  manifest = {
+    apiVersion = "gateway.networking.k8s.io/v1"
+    kind       = "HTTPRoute"
+    metadata = {
+      name      = "grouper-route"
+      namespace = kubernetes_namespace.grouper_app.metadata[0].name
+    }
+    spec = {
+      parentRefs = [{
+        name      = "grouper-gateway"
+        namespace = kubernetes_namespace.grouper_app.metadata[0].name
+      }]
+      rules = [{
+        backendRefs = [{
+          name = "grouper-service"
+          port = 80
+        }]
+      }]
+    }
+  }
+}

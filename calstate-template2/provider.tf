@@ -19,6 +19,11 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.32"
     }
+
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.9"
+    }
   }
 }
 
@@ -31,17 +36,20 @@ provider "azapi" {
   subscription_id = var.subscription_id
 }
 
-# Uses ~/.kube/config written by:
-#   - Locally / Cloud Shell: az aks get-credentials --admin
-#   - GitHub Actions:        "Get AKS Credentials" step in alb-stage1.yml
 provider "helm" {
   kubernetes {
-    config_path    = "~/.kube/config"
-    config_context = "aks-grouper-dev-cluster-admin"
+    host                   = data.azurerm_kubernetes_cluster.grouper.kube_config[0].host
+    client_certificate     = base64decode(data.azurerm_kubernetes_cluster.grouper.kube_config[0].client_certificate)
+    client_key             = base64decode(data.azurerm_kubernetes_cluster.grouper.kube_config[0].client_key)
+    cluster_ca_certificate = base64decode(data.azurerm_kubernetes_cluster.grouper.kube_config[0].cluster_ca_certificate)
   }
 }
 
 provider "kubernetes" {
-  config_path    = "~/.kube/config"
-  config_context = "aks-grouper-dev-cluster-admin"
+  host                   = data.azurerm_kubernetes_cluster.grouper.kube_config[0].host
+  client_certificate     = base64decode(data.azurerm_kubernetes_cluster.grouper.kube_config[0].client_certificate)
+  client_key             = base64decode(data.azurerm_kubernetes_cluster.grouper.kube_config[0].client_key)
+  cluster_ca_certificate = base64decode(data.azurerm_kubernetes_cluster.grouper.kube_config[0].cluster_ca_certificate)
 }
+
+provider "time" {}

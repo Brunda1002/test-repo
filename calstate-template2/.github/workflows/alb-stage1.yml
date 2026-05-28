@@ -1,41 +1,29 @@
-name: ALB Deploy
+name: ALB Stage1 Deploy
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      run_stage2:
-        description: "Run Stage 2 - ALB Controller (Helm)? (yes/no)"
-        required: true
-        default: "no"
 
 concurrency:
   group: terraform-state
   cancel-in-progress: false
 
-permissions:
-  contents: read
-
-env:
-  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-  ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-  ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
-
 jobs:
-  # ── Stage 1: Azure infra (managed identity, ALB resource, association) ────
-  # Runs automatically on every push to main
-  stage1:
-    name: "Stage 1 — Azure Infra"
+  terraform:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
 
     defaults:
       run:
-        working-directory: calstate-template2
+        working-directory: .
+
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
 
     steps:
       - name: Checkout Code
@@ -59,68 +47,5 @@ jobs:
       - name: Terraform Plan
         run: terraform plan -input=false -var-file="terraform.tfvars"
 
-      - name: Terraform Apply — Azure Infra
-        run: |
-          terraform apply \
-            -var-file="terraform.tfvars" \
-            -target=azurerm_user_assigned_identity.alb \
-            -target=azurerm_federated_identity_credential.alb \
-            -target=azapi_resource.alb \
-            -target=azapi_resource.alb_association \
-            -auto-approve \
-            -input=false
-
-  # ── Stage 2: ALB Controller (Helm) — run manually AFTER setup.sh ─────────
-  # Trigger: Actions → Run workflow → type "yes"
-  stage2:
-    name: "Stage 2 — ALB Controller (Helm)"
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_stage2 == 'yes'
-
-    defaults:
-      run:
-        working-directory: calstate-template2
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      # ── REQUIRED: Login to Azure before getting AKS credentials ──────────
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
-
-      # ── REQUIRED: Write ~/.kube/config so provider.tf can find it ─────────
-      # provider.tf uses config_path = "~/.kube/config" — this step creates it.
-      # Without this, Terraform errors: "no such file or directory"
-      - name: Get AKS Credentials
-        run: |
-          az aks get-credentials \
-            --resource-group Grouper-Dev \
-            --name aks-grouper-dev-cluster \
-            --overwrite-existing \
-            --admin
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.6.6
-
-      - name: Terraform Init
-        run: terraform init -reconfigure
-
-      - name: Force Unlock Existing State
-        run: |
-          terraform force-unlock -force 55f0fef5-2c13-0ac1-a06c-ff2f966a3a10 || true
-
-      - name: Terraform Validate
-        run: terraform validate
-
-      - name: Terraform Apply — ALB Controller
-        run: |
-          terraform apply \
-            -var-file="terraform.tfvars" \
-            -target=helm_release.alb_controller \
-            -auto-approve \
-            -input=false
+      - name: Terraform Apply
+        run: terraform apply -input=false -auto-approve -var-file="terraform.tfvars"

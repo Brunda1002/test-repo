@@ -17,3 +17,13 @@ variable "name_prefix" {
 variable "subscription_id" {
   type = string
 }
+variable "acr_name" {
+  description = "ACR name"
+  type        = string
+}
+
+variable "grouper_image_tag" {
+  description = "Grouper image tag"
+  type        = string
+  default     = "latest"
+}
