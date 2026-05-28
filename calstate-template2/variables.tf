@@ -17,13 +17,14 @@ variable "name_prefix" {
 variable "subscription_id" {
   type = string
 }
+
 variable "acr_name" {
-  description = "ACR name"
+  description = "ACR name (e.g. grouperdevacrpoc)"
   type        = string
 }
 
 variable "grouper_image_tag" {
-  description = "Grouper image tag"
+  description = "Grouper container image tag"
   type        = string
   default     = "latest"
 }

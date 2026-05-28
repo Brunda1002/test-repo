@@ -1,7 +1,8 @@
 # ============================================================
 # Calstate Template 2 — Grouper ALB POC
-# Stage 1 ONLY
-# Uses EXISTING App Gateway subnet from infra
+# Stage 1 + Stage 2
+# Stage 1 resources already deployed — lifecycle ignore_changes = all
+# Stage 2 installs ALB controller, deploys app, wires Gateway + HTTPRoute
 # ============================================================
 
 # ----- Read existing calstate infra -----
@@ -28,6 +29,10 @@ data "azurerm_subnet" "appgw" {
   resource_group_name  = data.azurerm_resource_group.grouper.name
 }
 
+# ============================================================
+# STAGE 1 — Azure resources (already deployed, managed in state)
+# ============================================================
+
 # ----- ALB Managed Identity -----
 
 resource "azurerm_user_assigned_identity" "alb" {
@@ -42,15 +47,6 @@ resource "azurerm_user_assigned_identity" "alb" {
 
 # ----- Workload Identity Federation -----
 
-# resource "azurerm_federated_identity_credential" "alb" {
-#   name                = "alb-federated"
-#   resource_group_name = data.azurerm_resource_group.grouper.name
-#   parent_id           = azurerm_user_assigned_identity.alb.id
-
-#   audience = ["api://AzureADTokenExchange"]
-#   issuer   = data.azurerm_kubernetes_cluster.grouper.oidc_issuer_url
-#   subject  = "system:serviceaccount:azure-alb-system:alb-controller-sa"
-# }
 resource "azurerm_federated_identity_credential" "alb" {
   name      = "alb-federated"
   parent_id = azurerm_user_assigned_identity.alb.id
@@ -94,6 +90,7 @@ resource "azapi_resource" "alb_association" {
     }
   }
 }
+
 # ============================================================
 # STAGE 2 — ALB Controller, App, Gateway, HTTPRoute
 # ============================================================
