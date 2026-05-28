@@ -42,10 +42,18 @@ resource "azurerm_user_assigned_identity" "alb" {
 
 # ----- Workload Identity Federation -----
 
+# resource "azurerm_federated_identity_credential" "alb" {
+#   name                = "alb-federated"
+#   resource_group_name = data.azurerm_resource_group.grouper.name
+#   parent_id           = azurerm_user_assigned_identity.alb.id
+
+#   audience = ["api://AzureADTokenExchange"]
+#   issuer   = data.azurerm_kubernetes_cluster.grouper.oidc_issuer_url
+#   subject  = "system:serviceaccount:azure-alb-system:alb-controller-sa"
+# }
 resource "azurerm_federated_identity_credential" "alb" {
-  name                = "alb-federated"
-  resource_group_name = data.azurerm_resource_group.grouper.name
-  parent_id           = azurerm_user_assigned_identity.alb.id
+  name      = "alb-federated"
+  parent_id = azurerm_user_assigned_identity.alb.id
 
   audience = ["api://AzureADTokenExchange"]
   issuer   = data.azurerm_kubernetes_cluster.grouper.oidc_issuer_url
