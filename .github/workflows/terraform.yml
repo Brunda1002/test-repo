@@ -29,6 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
 
+    defaults:
+      run:
+        working-directory: ./calstate-app
+
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +58,10 @@ jobs:
     name: "Stage 2A — Helm + App"
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_stage == 'stage2a'
+
+    defaults:
+      run:
+        working-directory: ./calstate-app
 
     steps:
       - uses: actions/checkout@v4
@@ -106,6 +114,10 @@ jobs:
     name: "Stage 2B — Gateway + Route"
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_stage == 'stage2b'
+
+    defaults:
+      run:
+        working-directory: ./calstate-app
 
     steps:
       - uses: actions/checkout@v4
