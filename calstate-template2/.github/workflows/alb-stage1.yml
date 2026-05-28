@@ -29,7 +29,15 @@ jobs:
 
       - name: Checkout Code
         uses: actions/checkout@v4
-
+      - name: Debug Secrets
+        run: |
+          echo "ARM_ACCESS_KEY length: ${#ARM_ACCESS_KEY}"
+          echo "ARM_SUBSCRIPTION_ID length: ${#ARM_SUBSCRIPTION_ID}"
+          echo "ARM_CLIENT_ID length: ${#ARM_CLIENT_ID}"
+        env:
+          ARM_ACCESS_KEY:      ${{ secrets.ARM_ACCESS_KEY }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
